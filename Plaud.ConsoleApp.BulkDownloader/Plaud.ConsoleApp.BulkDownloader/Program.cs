@@ -3,6 +3,7 @@ using API.Plaud.NET.Services;
 using System;
 using System.IO;
 using System.Linq;
+using API.Plaud.NET.Constants;
 using API.Plaud.NET.Models;
 using API.Plaud.NET.Models.Responses;
 using CommandLine;
@@ -58,10 +59,61 @@ namespace Plaud.ConsoleApp.BulkDownloader
             
             Console.WriteLine("Authenticated successfully.");
             GetNeededData();
-            DownloadRecordings();
+            SetupFileTagDirectories();
+            ProcessFiles();
         }
 
-        private static void DownloadRecordings()
+        /// <summary>
+        /// Creates directory structures for file tags and ensures directories exist for saving files.
+        /// </summary>
+        /// <remarks>
+        /// Checks if the root directory specified in the user input exists, and creates it if necessary.
+        /// For each file tag in the list, a subdirectory named after the tag (with invalid characters removed)
+        /// is created within the root directory. If no file tags are available, a message is displayed,
+        /// and files are organized directly in the root directory.
+        /// </remarks>
+        private static void SetupFileTagDirectories()
+        {
+            if (!Directory.Exists(_userInput?.Directory))
+            {
+                Directory.CreateDirectory(_userInput?.Directory!);
+            }
+            
+            if (_fileTags?.DataFiletagList.Count <= 0)
+            {
+                Console.WriteLine("No file tags to process.  All recordings will be saved in directories per recording in the root directory.");
+                return;
+            }
+            
+            foreach (DataFiletagList? fileTag in _fileTags?.DataFiletagList!)
+            {
+                string subDirectory = RemoveInvalidCharactersFromDirectory($"{fileTag.Name}");
+                string fullTagLocation = Path.Combine(_userInput?.Directory!, subDirectory);
+                if (!Directory.Exists(fullTagLocation))
+                {
+                    Directory.CreateDirectory(fullTagLocation);
+                }
+            }
+            
+            Console.WriteLine("File tag locations setup successfully.");
+        }
+
+        /// <summary>
+        /// Processes and organizes downloaded files based on metadata such as file tags.
+        /// Ensures that the necessary directory structure exists and invokes the appropriate methods
+        /// for downloading audio files, transcripts, and summaries for each recording.
+        /// </summary>
+        /// <remarks>
+        /// Steps:
+        /// 1. Verifies the existence of the main directory where files will be processed. Creates it if it does not exist.
+        /// 2. Checks if any recordings exist to process. Logs a message and exits if none are found.
+        /// 3. Iterates through each recording in the list of recordings:
+        /// a. Determines the tag associated with the recording, if any, and removes invalid characters from its name.
+        /// b. Creates a subdirectory structure for organizing files by tag and recording.
+        /// c. Calls corresponding methods to download the audio file, its transcript, and its summary.
+        /// Handles invalid file or directory names by removing unsupported characters from the names to ensure proper file system compatibility.
+        /// </remarks>
+        private static void ProcessFiles()
         {
             if (!Directory.Exists(_userInput?.Directory))
             {
@@ -76,26 +128,200 @@ namespace Plaud.ConsoleApp.BulkDownloader
 
             foreach (DataFileList? fileToDownload in _listOfAllRecordings?.DataFileList!)
             {
-                string subDirectory = $"{fileToDownload.Id}_{fileToDownload.Filename}";
-                subDirectory = RemoveInvalidCharactersFromDirectory(subDirectory);
-                string fullRecordingLocation = Path.Combine(_userInput?.Directory!, subDirectory);
+                string tagName = fileToDownload.FiletagIdList.Count > 0 ? _fileTags?.DataFiletagList.Where(t => t.Id == fileToDownload.FiletagIdList[0]).Select(t => t.Name).SingleOrDefault()! : string.Empty;
+                if (!string.IsNullOrEmpty(tagName))
+                {
+                    tagName = RemoveInvalidCharactersFromDirectory(tagName);
+                }
+                string directoryWithTag = string.IsNullOrEmpty(tagName) ? _userInput?.Directory! : Path.Combine(_userInput?.Directory!, tagName);
+                string subDirectory = RemoveInvalidCharactersFromDirectory(fileToDownload.Filename);
+                string fullRecordingLocation = Path.Combine(directoryWithTag, subDirectory);
                 if (!Directory.Exists(fullRecordingLocation))
                 {
                     Directory.CreateDirectory(fullRecordingLocation);
                 }
                 Console.WriteLine($"Working on: {subDirectory}");
-                string? audioBase64String = _apiService?.DownloadAudioFileAsync(fileToDownload.Id).Result;
+                DownloadAudioFile(fileToDownload.Id, fileToDownload.Filename, fullRecordingLocation);
+                DownloadTranscripts(fileToDownload.Id, $"Transcript_{fileToDownload.Filename}", fullRecordingLocation);
+                DownloadSummaries(fileToDownload.Id,$"Summary_{fileToDownload.Filename}", fullRecordingLocation);
+            }
+        }
+
+        /// <summary>
+        /// Downloads summary files in multiple formats (TXT, PDF, DOCX, Markdown) for a given recording
+        /// and writes them to the specified location on the disk.
+        /// </summary>
+        /// <param name="recordingId">The unique identifier of the recording whose summaries are being downloaded.</param>
+        /// <param name="fileName">The name of the file to be used for saving the summaries.</param>
+        /// <param name="fullRecordingLocation">The full directory path where the downloaded summaries will be stored.</param>
+        /// <remarks>
+        /// This method attempts to download summaries in all available formats. If a specific file format is unavailable,
+        /// an appropriate message is logged to the console.
+        /// </remarks>
+        private static void DownloadSummaries(string recordingId, string fileName, string fullRecordingLocation)
+        {
+            try
+            {
+                string? transcriptBase64StringTxt = _apiService?.DownloadSummaryFileAsync(recordingId, FileTypes.TXT).Result;
+                if (string.IsNullOrEmpty(transcriptBase64StringTxt))
+                {
+                    Console.WriteLine("Unable to download txt summary file.");
+                }
+                else
+                {
+                    WriteFileToDisk(fileName, fullRecordingLocation, "txt", transcriptBase64StringTxt);
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"TXT Summary Download Failed: {e.Message}");
+            }
+            
+            try
+            {
+                string? transcriptBase64StringPdf = _apiService?.DownloadSummaryFileAsync(recordingId, FileTypes.PDF).Result;
+                if (string.IsNullOrEmpty(transcriptBase64StringPdf))
+                {
+                    Console.WriteLine("Unable to download pdf summary file.");
+                }
+                else
+                {
+                    WriteFileToDisk(fileName, fullRecordingLocation, "pdf", transcriptBase64StringPdf);
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"PDF Summary Download Failed: {e.Message}");
+            }
+            
+            try
+            {
+                string? transcriptBase64StringDocx = _apiService?.DownloadSummaryFileAsync(recordingId, FileTypes.DOCX).Result;
+                if (string.IsNullOrEmpty(transcriptBase64StringDocx))
+                {
+                    Console.WriteLine("Unable to download docx summary file.");
+                }
+                else
+                {
+                    WriteFileToDisk(fileName, fullRecordingLocation, "docx", transcriptBase64StringDocx);
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"DOCX Summary Download Failed: {e.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Downloads transcript files in various formats (TXT, PDF, DOCX, SRT) for a given recording ID
+        /// and writes them to the disk at the specified location.
+        /// </summary>
+        /// <param name="recordingId">The unique identifier of the recording to download transcripts for.</param>
+        /// <param name="fileName">The base file name to use for the downloaded transcript files.</param>
+        /// <param name="fullRecordingLocation">The directory path where the files should be saved.</param>
+        /// <remarks>
+        /// This method attempts to download transcript files in multiple formats (TXT, PDF, DOCX, SRT) using
+        /// an API service. If the download for a specific format fails, a message will be displayed on the console.
+        /// Successfully downloaded files are written to the disk in the specified location with the appropriate file extension.
+        /// </remarks>
+        private static void DownloadTranscripts(string recordingId, string fileName, string fullRecordingLocation)
+        {
+            try
+            {
+                string? transcriptBase64StringTxt = _apiService?.DownloadTranscriptFileAsync(recordingId, FileTypes.TXT).Result;
+                if (string.IsNullOrEmpty(transcriptBase64StringTxt))
+                {
+                    Console.WriteLine("Unable to download txt transcript file.");
+                }
+                else
+                {
+                    WriteFileToDisk(fileName, fullRecordingLocation, "txt", transcriptBase64StringTxt);
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"TXT Transcript Download Failed: {e.Message}");
+            }
+
+            try
+            {
+                string? transcriptBase64StringPdf = _apiService?.DownloadTranscriptFileAsync(recordingId, FileTypes.PDF).Result;
+                if (string.IsNullOrEmpty(transcriptBase64StringPdf))
+                {
+                    Console.WriteLine("Unable to download pdf transcript file.");
+                }
+                else
+                {
+                    WriteFileToDisk(fileName, fullRecordingLocation, "pdf", transcriptBase64StringPdf);
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"PDF Transcript Download Failed: {e.Message}");
+            }
+
+            try
+            {
+                string? transcriptBase64StringDocx = _apiService?.DownloadTranscriptFileAsync(recordingId, FileTypes.DOCX).Result;
+                if (string.IsNullOrEmpty(transcriptBase64StringDocx))
+                {
+                    Console.WriteLine("Unable to download docx transcript file.");
+                }
+                else
+                {
+                    WriteFileToDisk(fileName, fullRecordingLocation, "docx", transcriptBase64StringDocx);
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"DOCX Transcript Download Failed: {e.Message}");
+            }
+
+            try
+            {
+                string? transcriptBase64StringSrt = _apiService?.DownloadTranscriptFileAsync(recordingId, FileTypes.SRT).Result;
+                if (string.IsNullOrEmpty(transcriptBase64StringSrt))
+                {
+                    Console.WriteLine("Unable to download srt transcript file.");
+                }
+                else
+                {
+                    WriteFileToDisk(fileName, fullRecordingLocation, "srt", transcriptBase64StringSrt);
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"SRT Transcript Download Failed: {e.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Downloads an audio file in Base64 string format and saves it as an MP3 file at the specified location.
+        /// </summary>
+        /// <param name="recordingId">The unique identifier of the recording to be downloaded.</param>
+        /// <param name="fileName">The name of the audio file to be saved.</param>
+        /// <param name="fullRecordingLocation">The directory path where the downloaded audio file will be stored.</param>
+        /// <remarks>
+        /// This method interacts with the Plaud API to retrieve the audio file data in Base64 format.
+        /// The resulting audio file is processed and stored in the designated directory as an MP3 file.
+        /// </remarks>
+        private static void DownloadAudioFile(string recordingId, string fileName, string fullRecordingLocation)
+        {
+            try
+            {
+                string? audioBase64String = _apiService?.DownloadAudioFileAsync(recordingId).Result;
                 if (string.IsNullOrEmpty(audioBase64String))
                 {
                     Console.WriteLine("Unable to download MP3 file.");
                 }
                 else
                 {
-                    string mp3FileName = RemoveInvalidCharactersFromDirectory(fileToDownload.Filename);
-                    string mp3File = Path.Combine(fullRecordingLocation, $"{mp3FileName}.mp3");
-                    byte[] mp3Bytes = Convert.FromBase64String(audioBase64String);
-                    File.WriteAllBytes(mp3File, mp3Bytes);
+                    WriteFileToDisk(fileName, fullRecordingLocation, "mp3", audioBase64String);
                 }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"MP3 Download Failed: {e.Message}");
             }
         }
         
@@ -169,6 +395,25 @@ namespace Plaud.ConsoleApp.BulkDownloader
         {
             char[] invalidChars = Path.GetInvalidFileNameChars();
             return new string(name.Select(ch => invalidChars.Contains(ch) ? '_' : ch).ToArray());
+        }
+
+        /// <summary>
+        /// Writes a file to disk with the specified name, path, type, and content.
+        /// </summary>
+        /// <param name="fileName">The name of the file to be created.</param>
+        /// <param name="filePath">The directory path where the file will be saved.</param>
+        /// <param name="fileType">The extension or type of the file (e.g., txt, pdf).</param>
+        /// <param name="fileContent">The content of the file in Base64-encoded string format.</param>
+        /// <remarks>
+        /// This method ensures that the file name is sanitized by removing invalid characters.
+        /// The file content is decoded from Base64 before being written to disk.
+        /// </remarks>
+        private static void WriteFileToDisk(string fileName, string filePath, string fileType, string fileContent)
+        {
+            string cleanedFileName = RemoveInvalidCharactersFromDirectory(fileName);
+            string fileWithExtension = Path.Combine(filePath, $"{cleanedFileName}.{fileType}");
+            byte[] fileBytes = Convert.FromBase64String(fileContent);
+            File.WriteAllBytes(fileWithExtension, fileBytes);
         }
     }
 }
