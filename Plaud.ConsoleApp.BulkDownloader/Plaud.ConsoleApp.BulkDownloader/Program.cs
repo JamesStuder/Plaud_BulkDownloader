@@ -61,6 +61,9 @@ namespace Plaud.ConsoleApp.BulkDownloader
             GetNeededData();
             SetupFileTagDirectories();
             ProcessFiles();
+            Console.WriteLine("Download complete.");
+            Console.WriteLine("Press any key to exit...");
+            Console.ReadKey();
         }
 
         /// <summary>
