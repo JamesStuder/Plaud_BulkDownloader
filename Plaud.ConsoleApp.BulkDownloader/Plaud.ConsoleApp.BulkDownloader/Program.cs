@@ -1,6 +1,8 @@
 ﻿using API.Plaud.NET.Interfaces;
 using API.Plaud.NET.Services;
 using System;
+using System.IO;
+using System.Linq;
 using API.Plaud.NET.Models;
 using API.Plaud.NET.Models.Responses;
 using CommandLine;
@@ -56,10 +58,16 @@ namespace Plaud.ConsoleApp.BulkDownloader
             
             Console.WriteLine("Authenticated successfully.");
             GetNeededData();
+            DownloadRecordings();
         }
 
         private static void DownloadRecordings()
         {
+            if (!Directory.Exists(_userInput?.Directory))
+            {
+                Directory.CreateDirectory(_userInput?.Directory!);
+            }
+            
             if (_listOfAllRecordings?.DataFileList.Count <= 0)
             {
                 Console.WriteLine("No recordings to download.");
@@ -68,7 +76,26 @@ namespace Plaud.ConsoleApp.BulkDownloader
 
             foreach (DataFileList? fileToDownload in _listOfAllRecordings?.DataFileList!)
             {
-                
+                string subDirectory = $"{fileToDownload.Id}_{fileToDownload.Filename}";
+                subDirectory = RemoveInvalidCharactersFromDirectory(subDirectory);
+                string fullRecordingLocation = Path.Combine(_userInput?.Directory!, subDirectory);
+                if (!Directory.Exists(fullRecordingLocation))
+                {
+                    Directory.CreateDirectory(fullRecordingLocation);
+                }
+                Console.WriteLine($"Working on: {subDirectory}");
+                string? audioBase64String = _apiService?.DownloadAudioFileAsync(fileToDownload.Id).Result;
+                if (string.IsNullOrEmpty(audioBase64String))
+                {
+                    Console.WriteLine("Unable to download MP3 file.");
+                }
+                else
+                {
+                    string mp3FileName = RemoveInvalidCharactersFromDirectory(fileToDownload.Filename);
+                    string mp3File = Path.Combine(fullRecordingLocation, $"{mp3FileName}.mp3");
+                    byte[] mp3Bytes = Convert.FromBase64String(audioBase64String);
+                    File.WriteAllBytes(mp3File, mp3Bytes);
+                }
             }
         }
         
@@ -131,6 +158,17 @@ namespace Plaud.ConsoleApp.BulkDownloader
         {
             Console.WriteLine(promptText);
             return Console.ReadLine();
+        }
+
+        /// <summary>
+        /// Removes invalid characters from the provided string to create a valid file name.
+        /// </summary>
+        /// <param name="name">The input string that may contain invalid file name characters.</param>
+        /// <returns>A new string with invalid file name characters replaced by underscores.</returns>
+        private static string RemoveInvalidCharactersFromDirectory(string name)
+        {
+            char[] invalidChars = Path.GetInvalidFileNameChars();
+            return new string(name.Select(ch => invalidChars.Contains(ch) ? '_' : ch).ToArray());
         }
     }
 }
