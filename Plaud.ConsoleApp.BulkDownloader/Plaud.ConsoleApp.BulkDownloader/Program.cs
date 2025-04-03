@@ -3,6 +3,7 @@ using API.Plaud.NET.Services;
 using System;
 using System.IO;
 using System.Linq;
+using System.Collections.Generic;
 using API.Plaud.NET.Constants;
 using API.Plaud.NET.Models;
 using API.Plaud.NET.Models.Responses;
@@ -11,7 +12,7 @@ using Plaud.ConsoleApp.BulkDownloader.Models;
 
 namespace Plaud.ConsoleApp.BulkDownloader
 {
-    internal class Program
+    public class Program
     {
         private static IPlaudApiService? _apiService;
         private static UserInput? _userInput;
@@ -24,14 +25,15 @@ namespace Plaud.ConsoleApp.BulkDownloader
         /// <param name="args">An array of command-line arguments.</param>
         /// <remarks>
         /// Command Line Arguments
-        /// -u = Plaud Username.
-        /// -p = Plaud Username.
-        /// -d = Directory to download files too.
+        /// -u = Plaud Username
+        /// -p = Plaud Password
+        /// -d = Directory to download files to
+        /// -s = Start date (yyyy-MM-dd) - Only download recordings after this date
         ///
         /// Environment Variables:
-        /// PlaudUserName = Plaud Username.
-        /// PlaudPassword = Plaud Username.
-        /// PlaudDownloadDirectory = Directory to download files too.
+        /// PlaudUserName = Plaud Username
+        /// PlaudPassword = Plaud Password
+        /// PlaudDownloadDirectory = Directory to download files to
         ///
         /// If neither of these items are passed / set then user is prompt to provide the info.
         /// </remarks>
@@ -102,6 +104,39 @@ namespace Plaud.ConsoleApp.BulkDownloader
         }
 
         /// <summary>
+        /// Filters recordings based on the start date provided in user input.
+        /// </summary>
+        /// <param name="userInput">The user input containing the start date.</param>
+        /// <param name="recordings">The list of recordings to filter.</param>
+        /// <returns>A filtered list of recordings that match the date criteria.</returns>
+        public static List<DataFileList> FilterRecordingsByDate(UserInput? userInput, List<DataFileList>? recordings)
+        {
+            if (recordings == null || recordings.Count == 0)
+            {
+                return new List<DataFileList>();
+            }
+
+            if (string.IsNullOrEmpty(userInput?.StartDate))
+            {
+                return recordings;
+            }
+
+            if (DateTime.TryParse(userInput.StartDate, out DateTime parsedDate))
+            {
+                Console.WriteLine($"Filtering recordings after {parsedDate:yyyy-MM-dd}");
+                var filteredRecordings = recordings.Where(r => 
+                    DateTimeOffset.FromUnixTimeMilliseconds(r.StartTime).DateTime >= parsedDate).ToList();
+                Console.WriteLine($"Found {filteredRecordings.Count} recordings after {parsedDate:yyyy-MM-dd}");
+                return filteredRecordings;
+            }
+            else
+            {
+                Console.WriteLine("Invalid date format. Please use yyyy-MM-dd format. Downloading all recordings.");
+                return recordings;
+            }
+        }
+
+        /// <summary>
         /// Processes and organizes downloaded files based on metadata such as file tags.
         /// Ensures that the necessary directory structure exists and invokes the appropriate methods
         /// for downloading audio files, transcripts, and summaries for each recording.
@@ -129,7 +164,15 @@ namespace Plaud.ConsoleApp.BulkDownloader
                 return;
             }
 
-            foreach (DataFileList? fileToDownload in _listOfAllRecordings?.DataFileList!)
+            var recordingsToProcess = FilterRecordingsByDate(_userInput, _listOfAllRecordings.DataFileList);
+
+            if (recordingsToProcess.Count == 0)
+            {
+                Console.WriteLine("No recordings found matching the date criteria.");
+                return;
+            }
+
+            foreach (DataFileList? fileToDownload in recordingsToProcess)
             {
                 string tagName = fileToDownload.FiletagIdList.Count > 0 ? _fileTags?.DataFiletagList.Where(t => t.Id == fileToDownload.FiletagIdList[0]).Select(t => t.Name).SingleOrDefault()! : string.Empty;
                 if (!string.IsNullOrEmpty(tagName))
@@ -143,7 +186,7 @@ namespace Plaud.ConsoleApp.BulkDownloader
                 {
                     Directory.CreateDirectory(fullRecordingLocation);
                 }
-                Console.WriteLine($"Working on: {subDirectory}");
+                Console.WriteLine($"Working on: {subDirectory} (Recorded: {DateTimeOffset.FromUnixTimeMilliseconds(fileToDownload.StartTime).DateTime:yyyy-MM-dd HH:mm:ss})");
                 DownloadAudioFile(fileToDownload.Id, fileToDownload.Filename, fullRecordingLocation);
                 DownloadTranscripts(fileToDownload.Id, $"Transcript_{fileToDownload.Filename}", fullRecordingLocation);
                 DownloadSummaries(fileToDownload.Id,$"Summary_{fileToDownload.Filename}", fullRecordingLocation);
@@ -355,6 +398,7 @@ namespace Plaud.ConsoleApp.BulkDownloader
         /// -u = Plaud Username.
         /// -p = Plaud Password.
         /// -d = Directory to download files to.
+        /// -s = Start date (yyyy-MM-dd) - Only download recordings after this date
         /// If any argument is missing, the method uses environment variables or prompts the user interactively.
         /// </remarks>
         private static void GetUserInputs(string[] args)
