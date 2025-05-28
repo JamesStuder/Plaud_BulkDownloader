@@ -33,7 +33,7 @@ namespace Plaud.ConsoleApp.BulkDownloader
         /// PlaudPassword = Plaud Username.
         /// PlaudDownloadDirectory = Directory to download files too.
         ///
-        /// If neither of these items are passed / set then user is prompt to provide the info.
+        /// If neither of these items is passed / set, then the user is prompted to provide the info.
         /// </remarks>
         public static void Main(string[] args)
         {
@@ -70,7 +70,7 @@ namespace Plaud.ConsoleApp.BulkDownloader
         /// Creates directory structures for file tags and ensures directories exist for saving files.
         /// </summary>
         /// <remarks>
-        /// Checks if the root directory specified in the user input exists, and creates it if necessary.
+        /// Checks if the root directory specified in the user input exists and creates it if necessary.
         /// For each file tag in the list, a subdirectory named after the tag (with invalid characters removed)
         /// is created within the root directory. If no file tags are available, a message is displayed,
         /// and files are organized directly in the root directory.
@@ -109,11 +109,11 @@ namespace Plaud.ConsoleApp.BulkDownloader
         /// <remarks>
         /// Steps:
         /// 1. Verifies the existence of the main directory where files will be processed. Creates it if it does not exist.
-        /// 2. Checks if any recordings exist to process. Logs a message and exits if none are found.
+        /// 2. Checks if any recordings exist to process. Logs a message and exits if none is found.
         /// 3. Iterates through each recording in the list of recordings:
-        /// a. Determines the tag associated with the recording, if any, and removes invalid characters from its name.
-        /// b. Creates a subdirectory structure for organizing files by tag and recording.
-        /// c. Calls corresponding methods to download the audio file, its transcript, and its summary.
+        ///     a. Determines the tag associated with the recording, if any, and removes invalid characters from its name.
+        ///     b. Creates a subdirectory structure for organizing files by tag and recording.
+        ///     c. Calls corresponding methods to download the audio file, its transcript, and its summary.
         /// Handles invalid file or directory names by removing unsupported characters from the names to ensure proper file system compatibility.
         /// </remarks>
         private static void ProcessFiles()
@@ -129,24 +129,30 @@ namespace Plaud.ConsoleApp.BulkDownloader
                 return;
             }
 
-            foreach (DataFileList? fileToDownload in _listOfAllRecordings?.DataFileList!)
+            foreach (DataFileList fileToDownload in _listOfAllRecordings?.DataFileList!)
             {
-                string tagName = fileToDownload.FiletagIdList.Count > 0 ? _fileTags?.DataFiletagList.Where(t => t.Id == fileToDownload.FiletagIdList[0]).Select(t => t.Name).SingleOrDefault()! : string.Empty;
-                if (!string.IsNullOrEmpty(tagName))
-                {
-                    tagName = RemoveInvalidCharactersFromDirectory(tagName);
-                }
-                string directoryWithTag = string.IsNullOrEmpty(tagName) ? _userInput?.Directory! : Path.Combine(_userInput?.Directory!, tagName);
+                // build your target folder & filename just like you already do
+                string tagName = (fileToDownload.FiletagIdList.Count > 0 ? _fileTags?.DataFiletagList.First(t => t.Id == fileToDownload.FiletagIdList[0]).Name : string.Empty)!;
+                tagName = RemoveInvalidCharactersFromDirectory(tagName);
+                string? directoryWithTag = string.IsNullOrEmpty(tagName) ? _userInput?.Directory : Path.Combine(_userInput?.Directory!, tagName);
                 string subDirectory = RemoveInvalidCharactersFromDirectory(fileToDownload.Filename);
-                string fullRecordingLocation = Path.Combine(directoryWithTag, subDirectory);
+                string fullRecordingLocation = Path.Combine(directoryWithTag!, subDirectory);
+                
+                if (_userInput!.Skip == true && Directory.Exists(fullRecordingLocation))
+                {
+                    Console.WriteLine($"Skipping “{fileToDownload.Filename}” (already downloaded).");
+                    continue;
+                }
+
                 if (!Directory.Exists(fullRecordingLocation))
                 {
                     Directory.CreateDirectory(fullRecordingLocation);
                 }
+
                 Console.WriteLine($"Working on: {subDirectory}");
                 DownloadAudioFile(fileToDownload.Id, fileToDownload.Filename, fullRecordingLocation);
                 DownloadTranscripts(fileToDownload.Id, $"Transcript_{fileToDownload.Filename}", fullRecordingLocation);
-                DownloadSummaries(fileToDownload.Id,$"Summary_{fileToDownload.Filename}", fullRecordingLocation);
+                DownloadSummaries(fileToDownload.Id, $"Summary_{fileToDownload.Filename}", fullRecordingLocation);
             }
         }
 
@@ -355,6 +361,7 @@ namespace Plaud.ConsoleApp.BulkDownloader
         /// -u = Plaud Username.
         /// -p = Plaud Password.
         /// -d = Directory to download files to.
+        /// -s = Skip previous downloaded files.  This is set to true by default.
         /// If any argument is missing, the method uses environment variables or prompts the user interactively.
         /// </remarks>
         private static void GetUserInputs(string[] args)
@@ -366,22 +373,27 @@ namespace Plaud.ConsoleApp.BulkDownloader
                     ui.Username = !string.IsNullOrWhiteSpace(ui.Username) ? ui.Username : Environment.GetEnvironmentVariable("PlaudUserName", EnvironmentVariableTarget.User) ?? Prompt("Enter username: ");
                     ui.Password = !string.IsNullOrWhiteSpace(ui.Password) ? ui.Password : Environment.GetEnvironmentVariable("PlaudPassword", EnvironmentVariableTarget.User) ?? Prompt("Enter password: ");
                     ui.Directory = !string.IsNullOrWhiteSpace(ui.Directory) ? ui.Directory : Environment.GetEnvironmentVariable("PlaudDownloadDirectory", EnvironmentVariableTarget.User) ?? Prompt("Enter directory: ");
-                    
                     Console.WriteLine($"Username: {ui.Username}");
                     Console.WriteLine($"Password: {ui.Password}");
                     Console.WriteLine($"Directory: {ui.Directory}");
                     _userInput = ui;
+                    if (!ui.Skip.HasValue)
+                    {
+                        string? env = Environment.GetEnvironmentVariable("PlaudSkip", EnvironmentVariableTarget.User);
+                        ui.Skip = bool.TryParse(env, out bool envSkip) ? envSkip : PromptBool("Skip previously downloaded files? (true/false): ");
+                    }
                 })
                 .WithNotParsed(errors =>
                 {
                     _userInput.Username = Prompt("Enter username: ");
                     _userInput.Password = Prompt("Enter password: ");
                     _userInput.Directory = Prompt("Enter directory: ");
+                    _userInput.Skip = PromptBool("Skip previously downloaded files? (true/false): ");
                 });
         }
 
         /// <summary>
-        /// Prompt user for input and return the input
+        /// Prompt the user for input and return the input
         /// </summary>
         private static string? Prompt(string promptText)
         {
@@ -389,6 +401,31 @@ namespace Plaud.ConsoleApp.BulkDownloader
             return Console.ReadLine();
         }
 
+        /// <summary>
+        /// Prompts the user to enter a boolean value using a provided message.
+        /// Acceptable inputs include variations of "true"/"false" such as "yes"/"no", "y"/"n", "t"/"f".
+        /// </summary>
+        /// <param name="message">The message to display to the user when prompting for input.</param>
+        /// <returns>A boolean value derived from the user's input. Returns <c>true</c> for affirmative inputs such as "true", "yes", "y", or "t"; otherwise returns <c>false</c>.</returns>
+        private static bool PromptBool(string message)
+        {
+            while (true)
+            {
+                Console.Write(message);
+                string? input = Console.ReadLine()?.Trim().ToLower();
+                switch (input)
+                {
+                    case "true":
+                        return true;
+                    case "false":
+                        return false;
+                    default:
+                        Console.WriteLine("Please enter ‘true’ or ‘false’.");
+                        break;
+                }
+            }
+        }
+        
         /// <summary>
         /// Removes invalid characters from the provided string to create a valid file name.
         /// </summary>

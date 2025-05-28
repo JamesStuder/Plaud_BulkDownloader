@@ -12,5 +12,8 @@ namespace Plaud.ConsoleApp.BulkDownloader.Models
 
         [Option('d', "directory", Required = false, HelpText = "Directory to download files to.")]
         public string? Directory { get; set; }
+        
+        [Option('s', "skip", Required = false, HelpText = "Skip Previous Downloaded.", Default = true)]
+        public bool? Skip { get; set; }
     }
 }
